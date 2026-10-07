@@ -1,13 +1,13 @@
 # =====================================================================
-# Fan Board – ESP32 DevKitC (WROOM-32) – Serverkasten Wohnmobil
+# Fan Server – ESP32 DevKitC (WROOM-32) – Serverkasten Wohnmobil
 # 4x 4-Pin-Lüfter an gemeinsamem PWM, einzelne Tacho-Eingänge
 # BME280 / BMP280 an I2C
 # Temperaturgeführte Regelung läuft autark auf dem ESP
 # =====================================================================
 
 substitutions:
-  name: fan-board
-  friendly_name: Fan Board
+  name: fan-server
+  friendly_name: Fan Server
   # Lüfter gilt als blockiert, wenn er läuft, aber langsamer dreht:
   stall_rpm: "200"
   # Welche Ports belegt sind (für die Störungsmeldung):
@@ -31,7 +31,7 @@ esp32:
 
 packages:
   # Pfad an deine Struktur anpassen (lokal oder github://czarofak/esphome_basics/...)
-  basics: !include basics.yaml
+  basics: !include .basics.yaml
 
 globals:
   - id: fan_running          # Zustand der Ein/Aus-Hysterese
