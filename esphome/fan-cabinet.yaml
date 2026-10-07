@@ -1,0 +1,375 @@
+# =====================================================================
+# Fan Board – ESP32 DevKitC (WROOM-32) – Serverkasten Wohnmobil
+# 4x 4-Pin-Lüfter an gemeinsamem PWM, einzelne Tacho-Eingänge
+# BME280 / BMP280 an I2C
+# Temperaturgeführte Regelung läuft autark auf dem ESP
+# =====================================================================
+
+substitutions:
+  name: fan-board
+  friendly_name: Fan Board
+  # Lüfter gilt als blockiert, wenn er läuft, aber langsamer dreht:
+  stall_rpm: "200"
+  # Welche Ports belegt sind (für die Störungsmeldung):
+  fan1_present: "true"
+  fan2_present: "false"
+  fan3_present: "false"
+  fan4_present: "false"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    priority: -100
+    then:
+      - script.execute: regulate
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+packages:
+  # Pfad an deine Struktur anpassen (lokal oder github://czarofak/esphome_basics/...)
+  basics: !include basics.yaml
+
+globals:
+  - id: fan_running          # Zustand der Ein/Aus-Hysterese
+    type: bool
+    initial_value: "false"
+  - id: auto_speed           # berechneter Sollwert der Automatik (%)
+    type: int
+    initial_value: "0"
+
+# ---------------------------------------------------------------------
+# I2C + Umweltsensor
+# ---------------------------------------------------------------------
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true          # Adresse (0x76 / 0x77) im Log prüfen
+  frequency: 100kHz
+
+sensor:
+  # --- BME280 (mit Feuchte). Falls BMP280: Block unten verwenden ---
+  - platform: bme280_i2c
+    address: 0x76
+    update_interval: 10s
+    temperature:
+      name: "Temperatur"
+      id: board_temp
+      oversampling: 2x
+      filters:
+        - timeout: 60s          # keine Werte mehr -> NaN -> Lüfter 100 %
+    pressure:
+      name: "Luftdruck"
+      oversampling: 2x
+    humidity:
+      name: "Luftfeuchtigkeit"
+      oversampling: 2x
+
+  # --- Alternative BMP280 (ohne Feuchte) ---
+  # - platform: bmp280_i2c
+  #   address: 0x76
+  #   update_interval: 10s
+  #   temperature:
+  #     name: "Temperatur"
+  #     id: board_temp
+  #     filters:
+  #       - timeout: 60s
+  #   pressure:
+  #     name: "Luftdruck"
+
+  # --- Sollwert der Automatik (zur Kontrolle in HA) ---
+  - platform: template
+    name: "Lüfter Sollwert Automatik"
+    unit_of_measurement: "%"
+    icon: mdi:fan-auto
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: 'return id(auto_speed);'
+
+  # -------------------------------------------------------------------
+  # Tacho-Eingänge: 2 Impulse pro Umdrehung -> Impulse/min * 0.5 = RPM
+  # -------------------------------------------------------------------
+  - platform: pulse_counter
+    pin:
+      number: GPIO32
+      mode:
+        input: true
+        pullup: true
+    name: "Lüfter 1 Drehzahl"
+    id: fan1_rpm
+    unit_of_measurement: "RPM"
+    icon: mdi:fan
+    accuracy_decimals: 0
+    update_interval: 5s
+    use_pcnt: true
+    internal_filter: 13us
+    filters:
+      - multiply: 0.5
+
+  - platform: pulse_counter
+    pin:
+      number: GPIO33
+      mode:
+        input: true
+        pullup: true
+    name: "Lüfter 2 Drehzahl"
+    id: fan2_rpm
+    unit_of_measurement: "RPM"
+    icon: mdi:fan
+    accuracy_decimals: 0
+    update_interval: 5s
+    use_pcnt: true
+    internal_filter: 13us
+    filters:
+      - multiply: 0.5
+
+  - platform: pulse_counter
+    pin:
+      number: GPIO26
+      mode:
+        input: true
+        pullup: true
+    name: "Lüfter 3 Drehzahl"
+    id: fan3_rpm
+    unit_of_measurement: "RPM"
+    icon: mdi:fan
+    accuracy_decimals: 0
+    update_interval: 5s
+    use_pcnt: true
+    internal_filter: 13us
+    filters:
+      - multiply: 0.5
+
+  - platform: pulse_counter
+    pin:
+      number: GPIO27
+      mode:
+        input: true
+        pullup: true
+    name: "Lüfter 4 Drehzahl"
+    id: fan4_rpm
+    unit_of_measurement: "RPM"
+    icon: mdi:fan
+    accuracy_decimals: 0
+    update_interval: 5s
+    use_pcnt: true
+    internal_filter: 13us
+    filters:
+      - multiply: 0.5
+
+# ---------------------------------------------------------------------
+# PWM-Ausgang (Intel-Spec 4-Pin: 25 kHz)
+# ---------------------------------------------------------------------
+output:
+  - platform: ledc
+    pin: GPIO25
+    id: fan_pwm
+    frequency: 25000Hz
+    # inverted: true   # aktivieren, falls 100 % = langsam (Transistorstufe invertiert)
+
+fan:
+  - platform: speed
+    output: fan_pwm
+    id: fans
+    name: "Lüfter"
+    speed_count: 100
+    restore_mode: RESTORE_DEFAULT_ON
+
+# ---------------------------------------------------------------------
+# Regelparameter (in HA unter "Konfiguration", bleiben über Reboot)
+# ---------------------------------------------------------------------
+number:
+  - platform: template
+    name: "Starttemperatur"
+    id: t_start
+    icon: mdi:thermometer-low
+    unit_of_measurement: "°C"
+    min_value: 15
+    max_value: 60
+    step: 0.5
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    mode: box
+    entity_category: config
+    on_value:
+      - script.execute: regulate
+
+  - platform: template
+    name: "Volllasttemperatur"
+    id: t_full
+    icon: mdi:thermometer-high
+    unit_of_measurement: "°C"
+    min_value: 20
+    max_value: 70
+    step: 0.5
+    initial_value: 45
+    optimistic: true
+    restore_value: true
+    mode: box
+    entity_category: config
+    on_value:
+      - script.execute: regulate
+
+  - platform: template
+    name: "Hysterese"
+    id: t_hyst
+    icon: mdi:arrow-expand-vertical
+    unit_of_measurement: "°C"
+    min_value: 0.5
+    max_value: 10
+    step: 0.5
+    initial_value: 2
+    optimistic: true
+    restore_value: true
+    mode: box
+    entity_category: config
+    on_value:
+      - script.execute: regulate
+
+  - platform: template
+    name: "Mindestdrehzahl"
+    id: min_speed
+    icon: mdi:fan-speed-1
+    unit_of_measurement: "%"
+    min_value: 10
+    max_value: 100
+    step: 1
+    initial_value: 30
+    optimistic: true
+    restore_value: true
+    mode: box
+    entity_category: config
+    on_value:
+      - script.execute: regulate
+
+  - platform: template
+    name: "Alarmtemperatur"
+    id: t_alarm
+    icon: mdi:thermometer-alert
+    unit_of_measurement: "°C"
+    min_value: 30
+    max_value: 80
+    step: 0.5
+    initial_value: 55
+    optimistic: true
+    restore_value: true
+    mode: box
+    entity_category: config
+
+# ---------------------------------------------------------------------
+# Automatik ein/aus (aus = Lüfter manuell über HA steuerbar)
+# ---------------------------------------------------------------------
+switch:
+  - platform: template
+    name: "Lüfter Automatik"
+    id: fan_auto
+    icon: mdi:fan-auto
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - script.execute: regulate
+
+# ---------------------------------------------------------------------
+# Regellogik
+#   T < Start - Hysterese      -> aus
+#   T >= Start                 -> ein, Mindestdrehzahl
+#   Start .. Volllast          -> linear Mindestdrehzahl .. 100 %
+#   T >= Volllast              -> 100 %
+#   Sensor ausgefallen (NaN)   -> 100 % (fail-safe)
+# ---------------------------------------------------------------------
+script:
+  - id: regulate
+    mode: single
+    then:
+      - if:
+          condition:
+            switch.is_on: fan_auto
+          then:
+            - lambda: |-
+                float t  = id(board_temp).state;
+                float ts = id(t_start).state;
+                float tf = id(t_full).state;
+                float h  = id(t_hyst).state;
+                float mn = id(min_speed).state;
+                if (tf <= ts) tf = ts + 1.0f;
+
+                int target;
+                if (std::isnan(t)) {
+                  target = 100;
+                } else {
+                  if (t >= ts) id(fan_running) = true;
+                  else if (t <= ts - h) id(fan_running) = false;
+
+                  if (!id(fan_running)) {
+                    target = 0;
+                  } else {
+                    float frac = (t - ts) / (tf - ts);
+                    if (frac < 0.0f) frac = 0.0f;
+                    if (frac > 1.0f) frac = 1.0f;
+                    target = (int) lroundf(mn + frac * (100.0f - mn));
+                  }
+                }
+                id(auto_speed) = target;
+
+                if (target == 0) {
+                  if (id(fans).state) {
+                    auto call = id(fans).turn_off();
+                    call.perform();
+                  }
+                } else if (!id(fans).state || id(fans).speed != target) {
+                  auto call = id(fans).turn_on();
+                  call.set_speed(target);
+                  call.perform();
+                }
+
+interval:
+  - interval: 10s
+    then:
+      - script.execute: regulate
+
+# ---------------------------------------------------------------------
+# Meldungen
+# ---------------------------------------------------------------------
+binary_sensor:
+  - platform: template
+    name: "Übertemperatur"
+    device_class: heat
+    lambda: |-
+      float t = id(board_temp).state;
+      return !std::isnan(t) && t >= id(t_alarm).state;
+    filters:
+      - delayed_off: 60s
+
+  - platform: template
+    name: "Temperatursensor Störung"
+    device_class: problem
+    lambda: 'return std::isnan(id(board_temp).state);'
+
+  - platform: template
+    name: "Lüfter 1 Störung"
+    device_class: problem
+    lambda: 'return ${fan1_present} && id(fans).state && id(fan1_rpm).state < ${stall_rpm};'
+    filters:
+      - delayed_on: 15s
+  - platform: template
+    name: "Lüfter 2 Störung"
+    device_class: problem
+    lambda: 'return ${fan2_present} && id(fans).state && id(fan2_rpm).state < ${stall_rpm};'
+    filters:
+      - delayed_on: 15s
+  - platform: template
+    name: "Lüfter 3 Störung"
+    device_class: problem
+    lambda: 'return ${fan3_present} && id(fans).state && id(fan3_rpm).state < ${stall_rpm};'
+    filters:
+      - delayed_on: 15s
+  - platform: template
+    name: "Lüfter 4 Störung"
+    device_class: problem
+    lambda: 'return ${fan4_present} && id(fans).state && id(fan4_rpm).state < ${stall_rpm};'
+    filters:
+      - delayed_on: 15s
