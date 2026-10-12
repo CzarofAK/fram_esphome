@@ -2,6 +2,12 @@
 
 Gemeinsames Package für alle eigenen ESPHome-Geräte (`.basics.yaml`).
 
+> [!WARNING]
+> **Sicherheit & Haftung / Safety & liability** – Privates Hobbyprojekt, bereitgestellt «wie besehen», Nutzung **auf eigene Gefahr**.
+> Dieses Package bestimmt API, OTA, WLAN, Fallback-AP und Webserver **aller** eingebundenen Geräte. Eine unsichere Konfiguration (schwache Passwörter, Webserver ohne Authentifizierung, offener Fallback-AP) kann Fremden Zugriff auf Geräte geben, die Lasten, Heizung oder Fahrzeugfunktionen schalten.
+> Secrets nie ins Repository einchecken.
+> Details: [DISCLAIMER.md](DISCLAIMER.md) (DE/EN).
+
 ## Einbindung
 Datei nach `/config/esphome/.basics.yaml` legen, im Gerät:
 
@@ -37,3 +43,7 @@ Benötigt `wifi_ssid`, `wifi_password`, `fallback_password`, `api_encryption_key
 ## Geräte
 - [mpu6050](https://github.com/CzarofAK/mpu6050) – WOMO-Nivelliersensor
 - [smartebl](https://github.com/CzarofAK/smartebl) – Smart EBL
+
+## Lizenz
+
+MIT, siehe [LICENSE](LICENSE). Nutzung auf eigene Gefahr – siehe [DISCLAIMER.md](DISCLAIMER.md).
